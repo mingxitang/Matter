@@ -116,12 +116,16 @@ class ThemePreferences(private val context: Context) {
         val PALETTE_STYLE = stringPreferencesKey("palette_style")
         val BLUR_EFFECTS_ENABLED = booleanPreferencesKey("blur_effects_enabled")
         val TOP_BAR_AUTO_HIDE = booleanPreferencesKey("top_bar_auto_hide")
+        val HOME_SHOWS_HOT_FEED = booleanPreferencesKey("home_shows_hot_feed")
     }
 
-    val themeStateFlow: Flow<AppThemeState> = context.themeDataStore.data
-        .catch { exception ->
-            if (exception is IOException) emit(emptyPreferences()) else throw exception
-        }
+    private val preferences = context.themeDataStore.data.catch { exception ->
+        if (exception is IOException) emit(emptyPreferences()) else throw exception
+    }
+
+    val homeShowsHotFeed: Flow<Boolean> = preferences.map { it[Keys.HOME_SHOWS_HOT_FEED] ?: false }
+
+    val themeStateFlow: Flow<AppThemeState> = preferences
         .map { prefs ->
             val dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true
             val isAmoled = prefs[Keys.IS_AMOLED] ?: false
@@ -152,6 +156,12 @@ class ThemePreferences(private val context: Context) {
                 topBarAutoHide = prefs[Keys.TOP_BAR_AUTO_HIDE] ?: false
             )
         }
+
+    suspend fun toggleHomeFeed() {
+        context.themeDataStore.edit { prefs ->
+            prefs[Keys.HOME_SHOWS_HOT_FEED] = prefs[Keys.HOME_SHOWS_HOT_FEED] != true
+        }
+    }
 
     suspend fun setTopBarAutoHide(enabled: Boolean) {
         context.themeDataStore.edit { prefs ->

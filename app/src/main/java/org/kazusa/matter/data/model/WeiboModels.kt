@@ -303,7 +303,8 @@ data class WeiboUrlDto(
     @SerialName("short_url") val shortUrl: String? = null,
     @SerialName("long_url") val longUrl: String? = null,
     @SerialName("url_title") val title: String? = null,
-    @SerialName("object_type") val objectType: String? = null
+    @SerialName("object_type") val objectType: String? = null,
+    @SerialName("url_pic") val coverUrl: String? = null
 )
 
 @Serializable
@@ -311,6 +312,7 @@ data class WeiboPageInfoDto(
     val type: String? = null,
     @SerialName("page_title") val pageTitle: String? = null,
     @Serializable(with = WeiboPagePicSerializer::class) @SerialName("page_pic") val pagePic: String? = null,
+    @SerialName("page_url") val pageUrl: String? = null,
     @SerialName("media_info") val mediaInfo: WeiboMediaInfoDto? = null
 )
 

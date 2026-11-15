@@ -19,12 +19,22 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import java.net.URI
 import org.kazusa.matter.data.model.StatusMediaItem
 import org.kazusa.matter.data.model.WeiboStatusDto
 
 data class FormattedWeiboText(
     val annotatedString: AnnotatedString,
-    val inlineContent: Map<String, InlineTextContent> = emptyMap()
+    val inlineContent: Map<String, InlineTextContent> = emptyMap(),
+    val shareCards: List<PostShareCard> = emptyList()
+)
+
+data class PostShareCard(
+    val url: String,
+    val title: String,
+    val host: String,
+    val coverUrl: String?,
+    val isVote: Boolean
 )
 
 object WeiboTextFormatter {
@@ -95,8 +105,8 @@ object WeiboTextFormatter {
         emojiImages: Map<String, String> = emptyMap(),
         post: WeiboStatusDto? = null
     ): FormattedWeiboText {
-        val source = post?.let { it.textRaw ?: it.text } ?: rawText
-        if (source.isNullOrBlank()) {
+        val source = (post?.let { it.textRaw ?: it.text } ?: rawText).orEmpty()
+        if (source.isBlank() && post?.pageInfo?.pageUrl.isNullOrBlank()) {
             return FormattedWeiboText(AnnotatedString(""))
         }
 
@@ -136,20 +146,23 @@ object WeiboTextFormatter {
         }
 
         val videos = post?.mediaItems.orEmpty().filterIsInstance<StatusMediaItem.Video>()
-        val originalLinkTitles = if (videos.isNotEmpty() && post?.text != source) {
-            anchorTagRegex.findAll(post?.text.orEmpty()).map(::readAnchor).toMap()
+        val originalLinkTitles = if (post != null && post.text != source) {
+            anchorTagRegex.findAll(post.text).map(::readAnchor).toMap()
         } else {
             emptyMap()
         }
-        var hidVideoLink = false
+        var removedInlineLink = false
+        val shareCards = linkedMapOf<String, PostShareCard>()
 
         val inlineContentMap = mutableMapOf<String, InlineTextContent>()
         var inlineIdCounter = 0
 
         fun AnnotatedString.Builder.appendWebLink(href: String, label: String? = null) {
             val link = post?.urlStruct?.firstOrNull { it.shortUrl == href || it.longUrl == href }
-            val title = link?.title?.takeIf { it.isNotBlank() } ?: label ?: originalLinkTitles[href]
             val target = link?.longUrl?.takeIf { it.isNotBlank() } ?: href
+            val page = post?.pageInfo?.takeIf { it.pageUrl == target || it.pageUrl == href }
+            val title = link?.title?.takeIf { it.isNotBlank() }
+                ?: page?.pageTitle?.takeIf { it.isNotBlank() } ?: label ?: originalLinkTitles[href]
             if (videos.isNotEmpty()) {
                 val isVideoLink = link?.objectType.equals("video", ignoreCase = true) ||
                     weiboVideoPage.containsMatchIn(target) ||
@@ -157,18 +170,32 @@ object WeiboTextFormatter {
                     (weiboShortLink.containsMatchIn(href) &&
                         (title == "微博视频" || title?.endsWith("的微博视频") == true))
                 if (isVideoLink) {
-                    hidVideoLink = true
+                    removedInlineLink = true
                     return
                 }
             }
 
             val isVote = link?.objectType.equals("vote", ignoreCase = true) ||
-                weiboVotePage.containsMatchIn(target)
-            val displayTitle = if (post != null && isVote) {
-                title?.takeUnless { it == "网页链接" || it == "微博投票" || it == "投票" }
-                    ?.let { "参与投票 · $it" } ?: "参与投票"
-            } else {
-                title ?: href
+                page?.type.equals("vote", ignoreCase = true) || weiboVotePage.containsMatchIn(target)
+            val cardTitle = title?.takeUnless { it == "网页链接" || it == href || it == target }
+            if (post != null && (isVote || cardTitle != null)) {
+                val linkUri = parseWebUri(target) ?: parseWebUri(href)
+                if (linkUri != null) {
+                    shareCards.putIfAbsent(
+                        linkUri.toString(),
+                        PostShareCard(
+                            url = linkUri.toString(),
+                            title = cardTitle ?: "微博投票",
+                            host = linkUri.host.orEmpty(),
+                            coverUrl = (link?.coverUrl ?: page?.pagePic)
+                                ?.let { if (it.startsWith("//")) "https:$it" else it }
+                                ?.takeIf { parseWebUri(it) != null },
+                            isVote = isVote
+                        )
+                    )
+                    removedInlineLink = true
+                    return
+                }
             }
             val linkStyle = SpanStyle(color = primaryColor)
             val linkIconId = "link_icon_${inlineIdCounter++}"
@@ -188,7 +215,7 @@ object WeiboTextFormatter {
             }
             withLink(LinkAnnotation.Url(url = href, styles = TextLinkStyles(style = linkStyle))) {
                 appendInlineContent(linkIconId, "[link]")
-                append(" $displayTitle")
+                append(" ${title ?: href}")
             }
         }
 
@@ -280,9 +307,16 @@ object WeiboTextFormatter {
             if (lastIndex < preprocessed.length) {
                 append(preprocessed.substring(lastIndex))
             }
+            val page = post?.pageInfo
+            val pageUrl = page?.pageUrl
+            if (videos.isEmpty() && !page?.pageTitle.isNullOrBlank() &&
+                pageUrl != null && parseWebUri(pageUrl) != null
+            ) {
+                appendWebLink(pageUrl)
+            }
         }
 
-        val visibleText = if (hidVideoLink) {
+        val visibleText = if (removedInlineLink) {
             val trimmed = annotated.text.trim()
             val start = if (trimmed.isEmpty()) 0 else annotated.text.indexOf(trimmed)
             annotated.subSequence(start, start + trimmed.length)
@@ -291,9 +325,13 @@ object WeiboTextFormatter {
         }
         return FormattedWeiboText(
             annotatedString = visibleText,
-            inlineContent = inlineContentMap
+            inlineContent = inlineContentMap,
+            shareCards = shareCards.values.toList()
         )
     }
+
+    private fun parseWebUri(url: String): URI? = runCatching { URI(url) }.getOrNull()
+        ?.takeIf { (it.scheme == "http" || it.scheme == "https") && it.host != null && it.userInfo == null }
 
     private fun readAnchor(match: MatchResult): Pair<String, String> {
         val hrefMatch = hrefAttrRegex.find(match.groupValues[1])

@@ -311,7 +311,7 @@ private fun PostCardContent(
             // HTML 解码 + AnnotatedString 构建开销较大，按文本内容缓存，避免每次重组重跑
             val primaryColor = MaterialTheme.colorScheme.primary
             val onlineEmojiImages = LocalOnlineEmojiImages.current
-            val contentFormatted = remember(post.textRaw, post.text, post.mediaItems, post.urlStruct, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
+            val contentFormatted = remember(post.textRaw, post.text, post.mediaItems, post.urlStruct, post.pageInfo, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
                 WeiboTextFormatter.formatWeiboContent(
                     emojiImages = onlineEmojiImages,
                     post = post,
@@ -330,6 +330,8 @@ private fun PostCardContent(
                     modifier = Modifier.weiboPostContentSharedBounds(containerKey = sharedOwnerKey)
                 )
             }
+
+            PostShareCards(contentFormatted.shareCards)
 
             // 媒体区：图片与视频按服务端下发的先后顺序混排在同一宫格里
             val mediaItems = post.mediaItems
@@ -456,7 +458,7 @@ private fun RetweetCard(
         val primaryColor = MaterialTheme.colorScheme.primary
         val authorLinkBaseSpan = MaterialTheme.typography.bodyMediumEmphasized.toSpanStyle()
         val onlineEmojiImages = LocalOnlineEmojiImages.current
-        val bodyFormatted = remember(retweet.textRaw, retweet.text, retweet.mediaItems, retweet.urlStruct, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
+        val bodyFormatted = remember(retweet.textRaw, retweet.text, retweet.mediaItems, retweet.urlStruct, retweet.pageInfo, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
             WeiboTextFormatter.formatWeiboContent(
                 emojiImages = onlineEmojiImages,
                 post = retweet,
@@ -504,6 +506,8 @@ private fun RetweetCard(
                 )
             )
         }
+
+        PostShareCards(bodyFormatted.shareCards)
 
         // 转发微博的媒体区：与主微博同一套混排宫格，图片与视频共用一条顺序
         val retweetMediaItems = retweet.mediaItems

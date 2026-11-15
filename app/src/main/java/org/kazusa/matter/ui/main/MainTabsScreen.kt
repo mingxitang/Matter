@@ -136,6 +136,8 @@ fun MainTabsScreen(
     // 热搜榜的状态由 ViewModel 持有：榜单切换由悬浮底栏右侧的分类菜单触发，与热搜列表共用同一份
     hotSearchViewModel: HotSearchBoardViewModel = koinViewModel()
 ) {
+    val showHotFeed = themePreferences.homeShowsHotFeed
+        .collectAsStateWithLifecycle(initialValue = null).value ?: return
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { MainTab.entries.size })
     val coroutineScope = rememberCoroutineScope()
 
@@ -144,7 +146,6 @@ fun MainTabsScreen(
         LazyListState()
     }
 
-    var showHotFeed by rememberSaveable { mutableStateOf(false) }
     val hotFeedListState = remember { mutableStateOf<LazyListState?>(null) }
     val hotSearchListState = remember { mutableStateOf<LazyListState?>(null) }
 
@@ -212,7 +213,6 @@ fun MainTabsScreen(
     LaunchedEffect(publishedCount) {
         if (publishedCount > handledPublishCount) {
             handledPublishCount = publishedCount
-            showHotFeed = false
             coroutineScope.launch { pagerState.animateScrollToPage(MainTab.Timeline.ordinal) }
             timelineViewModel.loadTimeline(isRefresh = true)
         }
@@ -408,7 +408,7 @@ fun MainTabsScreen(
                 showHotFeed = showHotFeed,
                 hotFeedUiState = hotFeedState,
                 hotSearchViewModel = hotSearchViewModel,
-                onToggleTimelineMode = { showHotFeed = !showHotFeed },
+                onToggleTimelineMode = { coroutineScope.launch { themePreferences.toggleHomeFeed() } },
                 onHotCategorySelected = { category ->
                     hotFeedViewModel.selectCategory(category)
                 },

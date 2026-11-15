@@ -112,6 +112,7 @@ import org.kazusa.matter.data.model.WeiboStatusDto
 import org.kazusa.matter.ui.components.composer.OnlineEmojiViewModel
 import org.kazusa.matter.ui.components.AuthorBadgeTag
 import org.kazusa.matter.ui.components.EmptyMessage
+import org.kazusa.matter.ui.components.PostShareCards
 import org.kazusa.matter.ui.components.StatusMediaGrid
 import org.kazusa.matter.ui.components.videoTitleFallback
 import org.kazusa.matter.data.repository.LikeState
@@ -777,7 +778,7 @@ private fun PostDetailBody(
             // 微博正文 (宽松舒适的阅读体验，高亮并支持点击@博主、#话题#、网页链接与表情图标)
             val primaryColor = MaterialTheme.colorScheme.primary
             val onlineEmojiImages = LocalOnlineEmojiImages.current
-            val contentFormatted = remember(post.textRaw, post.text, post.mediaItems, post.urlStruct, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
+            val contentFormatted = remember(post.textRaw, post.text, post.mediaItems, post.urlStruct, post.pageInfo, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
                 WeiboTextFormatter.formatWeiboContent(
                     emojiImages = onlineEmojiImages,
                     post = post,
@@ -797,6 +798,8 @@ private fun PostDetailBody(
                         .weiboPostContentSharedBounds(containerKey = containerSharedKey)
                 )
             }
+
+            PostShareCards(contentFormatted.shareCards)
 
             // 媒体区：图片与视频按服务端下发的先后顺序混排在同一宫格里
             val mediaItems = post.mediaItems
@@ -849,7 +852,7 @@ private fun PostDetailBody(
                 val retweetPrimaryColor = MaterialTheme.colorScheme.primary
                 val authorLinkBaseSpan = MaterialTheme.typography.bodyMediumEmphasized.toSpanStyle()
                 val onlineEmojiImages = LocalOnlineEmojiImages.current
-                val bodyFormatted = remember(retweet.textRaw, retweet.text, retweet.mediaItems, retweet.urlStruct, retweetPrimaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
+                val bodyFormatted = remember(retweet.textRaw, retweet.text, retweet.mediaItems, retweet.urlStruct, retweet.pageInfo, retweetPrimaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
                     WeiboTextFormatter.formatWeiboContent(
                         emojiImages = onlineEmojiImages,
                         post = retweet,
@@ -891,6 +894,8 @@ private fun PostDetailBody(
                         )
                     )
                 }
+
+                PostShareCards(bodyFormatted.shareCards)
 
                 // 转发微博的媒体区：与主微博同一套混排宫格（图片 + 视频）
                 val retweetMediaItems = retweet.mediaItems

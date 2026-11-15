@@ -41,6 +41,8 @@
 
 ## 正式发布
 
+只需编译 Release 变体时，在 Actions 手动运行 **Auto Build**，保持 `publish=false`。未配置正式签名的仓库会上传 `matter-release-unsigned`，其中的 APK 需要签名后才能安装。配置完整签名后，Auto Build 会上传签名后的 `matter-release`。
+
 正式版只通过 GitHub Actions 触发，不再有本地分发脚本。在 `main` 分支的 Actions 页面手动运行 **Release** workflow（`workflow_dispatch`）：构建成功后自动打 tag `v<版本名>` 并创建 GitHub Release，附 APK、SHA-256 与 `mapping.txt`。
 
 - 入口 workflow 带 `if: github.actor == 'HapeLee' && github.ref == 'refs/heads/main'`，其他分支或其他人触发不会发布。

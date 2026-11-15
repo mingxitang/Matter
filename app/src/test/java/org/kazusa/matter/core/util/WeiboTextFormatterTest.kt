@@ -99,17 +99,42 @@ class WeiboTextFormatterTest {
     }
 
     @Test
-    fun structuredVoteLinkUsesThePollTitleAndOpensItsOriginalLink() {
+    fun structuredVoteLinkBecomesANativeCardWithoutADuplicateInlineLink() {
         val url = "https://t.cn/poll"
         val post = WeiboStatusDto(
             textRaw = url,
             urlStruct = listOf(WeiboUrlDto(shortUrl = url, title = "你选哪项？", objectType = "vote"))
         )
 
-        val text = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post).annotatedString
-        assertTrue(text.text.endsWith("参与投票 · 你选哪项？"))
-        val link = text.getLinkAnnotations(0, text.length).single().item as LinkAnnotation.Url
-        assertEquals(url, link.url)
+        val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
+        assertTrue(formatted.annotatedString.text.isEmpty())
+        val card = formatted.shareCards.single()
+        assertTrue(card.isVote)
+        assertEquals("你选哪项？", card.title)
+        assertEquals(url, card.url)
+    }
+
+    @Test
+    fun pageAndShortLinkForTheSameShareProduceOneCard() {
+        val shortUrl = "https://t.cn/article"
+        val fullUrl = "https://example.com/article"
+        val post = WeiboStatusDto(
+            textRaw = "推荐阅读 $shortUrl",
+            urlStruct = listOf(WeiboUrlDto(shortUrl = shortUrl, longUrl = fullUrl)),
+            pageInfo = WeiboPageInfoDto(
+                pageUrl = fullUrl,
+                pageTitle = "文章标题",
+                pagePic = "//example.com/cover.jpg"
+            )
+        )
+
+        val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
+        assertEquals("推荐阅读", formatted.annotatedString.text)
+        val card = formatted.shareCards.single()
+        assertFalse(card.isVote)
+        assertEquals("文章标题", card.title)
+        assertEquals("example.com", card.host)
+        assertEquals("https://example.com/cover.jpg", card.coverUrl)
     }
 
     @Test

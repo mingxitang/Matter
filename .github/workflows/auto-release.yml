@@ -120,21 +120,33 @@ jobs:
         run: sed -i '/maven.aliyun.com/d' settings.gradle.kts
 
       - name: Decode signing material
+        id: signing
         env:
+          PUBLISH: ${{ inputs.publish }}
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          [[ -n "$KEYSTORE_BASE64" ]] || { echo "::error::ANDROID_KEYSTORE_BASE64 is not set"; exit 1; }
+          if [[ -z "$KEYSTORE_BASE64" ]]; then
+            [[ "$PUBLISH" != "true" ]] || { echo "::error::ANDROID_KEYSTORE_BASE64 is required for publishing"; exit 1; }
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]] \
+            || { echo "::error::Incomplete Android signing configuration"; exit 1; }
           # secret 里可能混入换行（编辑器/管道写入），base64 -d 遇到 \r 会直接报 invalid input
           echo "$KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 -d > "$RUNNER_TEMP/release.jks"
           [[ -s "$RUNNER_TEMP/release.jks" ]] || { echo "::error::decoded keystore is empty"; exit 1; }
           {
             echo ""
             echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks"
-            echo "RELEASE_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
-            echo "RELEASE_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}"
-            echo "RELEASE_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}"
+            echo "RELEASE_STORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
           } >> gradle.properties
+          echo "signed=true" >> "$GITHUB_OUTPUT"
 
       - name: Run unit tests
         run: ./gradlew :app:testDebugUnitTest --console=plain
@@ -153,6 +165,7 @@ jobs:
 
       - name: Collect and verify artifacts
         env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
           VERSION_NAME: ${{ needs.prepare.outputs.name }}
           VERSION_CODE: ${{ needs.prepare.outputs.code }}
         run: |
@@ -160,12 +173,14 @@ jobs:
           mapfile -t APKS < <(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk')
           [[ "${#APKS[@]}" -eq 1 ]] || { echo "::error::expected exactly one release APK, found ${#APKS[@]}"; exit 1; }
           APK="${APKS[0]}"
-          case "$APK" in
-            *unsigned*) echo "::error::release APK is unsigned; signing properties were not applied"; exit 1 ;;
-          esac
-
           BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
+          if [[ "$SIGNED" == "true" ]]; then
+            "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
+            OUT="dist/Matter-$VERSION_NAME-$VERSION_CODE.apk"
+          else
+            [[ "$APK" == *-unsigned.apk ]] || { echo "::error::expected an unsigned APK"; exit 1; }
+            OUT="dist/Matter-$VERSION_NAME-$VERSION_CODE-unsigned.apk"
+          fi
           BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$APK")
           echo "$BADGING" | head -n 1
           echo "$BADGING" | grep -q "versionCode='$VERSION_CODE'" \
@@ -174,7 +189,6 @@ jobs:
             || { echo "::error::APK versionName does not match $VERSION_NAME"; exit 1; }
 
           mkdir -p dist
-          OUT="dist/Matter-$VERSION_NAME-$VERSION_CODE.apk"
           cp "$APK" "$OUT"
           sha256sum "$OUT" > dist/SHA256SUMS.txt
           cp app/build/outputs/mapping/release/mapping.txt dist/mapping.txt 2>/dev/null || true
@@ -182,7 +196,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: matter-release
+          name: ${{ steps.signing.outputs.signed == 'true' && 'matter-release' || 'matter-release-unsigned' }}
           if-no-files-found: error
           path: dist/*
 
