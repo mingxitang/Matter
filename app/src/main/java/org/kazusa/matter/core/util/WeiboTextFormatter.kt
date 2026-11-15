@@ -106,7 +106,7 @@ object WeiboTextFormatter {
         post: WeiboStatusDto? = null
     ): FormattedWeiboText {
         val source = (post?.let { it.textRaw ?: it.text } ?: rawText).orEmpty()
-        if (source.isBlank() && post?.pageInfo?.pageUrl.isNullOrBlank()) {
+        if (source.isBlank() && post?.pageInfo?.pageUrl.isNullOrBlank() && post?.urlStruct.isNullOrEmpty()) {
             return FormattedWeiboText(AnnotatedString(""))
         }
 
@@ -157,12 +157,14 @@ object WeiboTextFormatter {
         val inlineContentMap = mutableMapOf<String, InlineTextContent>()
         var inlineIdCounter = 0
 
-        fun AnnotatedString.Builder.appendWebLink(href: String, label: String? = null) {
+        fun AnnotatedString.Builder.appendWebLink(href: String, label: String? = null, fromText: Boolean = true) {
             val link = post?.urlStruct?.firstOrNull { it.shortUrl == href || it.longUrl == href }
             val target = link?.longUrl?.takeIf { it.isNotBlank() } ?: href
             val page = post?.pageInfo?.takeIf { it.pageUrl == target || it.pageUrl == href }
-            val title = link?.title?.takeIf { it.isNotBlank() }
-                ?: page?.pageTitle?.takeIf { it.isNotBlank() } ?: label ?: originalLinkTitles[href]
+            val title = sequenceOf(link?.title, page?.pageTitle, label, originalLinkTitles[href])
+                .filterNotNull()
+                .map(String::trim)
+                .firstOrNull { it.isNotEmpty() && it != "网页链接" && it != href && it != target }
             if (videos.isNotEmpty()) {
                 val isVideoLink = link?.objectType.equals("video", ignoreCase = true) ||
                     weiboVideoPage.containsMatchIn(target) ||
@@ -170,22 +172,24 @@ object WeiboTextFormatter {
                     (weiboShortLink.containsMatchIn(href) &&
                         (title == "微博视频" || title?.endsWith("的微博视频") == true))
                 if (isVideoLink) {
-                    removedInlineLink = true
+                    if (fromText) removedInlineLink = true
                     return
                 }
             }
 
             val isVote = link?.objectType.equals("vote", ignoreCase = true) ||
-                page?.type.equals("vote", ignoreCase = true) || weiboVotePage.containsMatchIn(target)
-            val cardTitle = title?.takeUnless { it == "网页链接" || it == href || it == target }
-            if (post != null && (isVote || cardTitle != null)) {
+                page?.type.equals("vote", ignoreCase = true) || weiboVotePage.containsMatchIn(target) ||
+                (weiboShortLink.containsMatchIn(href) && (
+                    title == "微博投票" || title == "参与投票" || title?.endsWith("的微博投票") == true
+                ))
+            if (post != null) {
                 val linkUri = parseWebUri(target) ?: parseWebUri(href)
                 if (linkUri != null) {
                     shareCards.putIfAbsent(
                         linkUri.toString(),
                         PostShareCard(
                             url = linkUri.toString(),
-                            title = cardTitle ?: "微博投票",
+                            title = title ?: if (isVote) "微博投票" else "网页链接",
                             host = linkUri.host.orEmpty(),
                             coverUrl = (link?.coverUrl ?: page?.pagePic)
                                 ?.let { if (it.startsWith("//")) "https:$it" else it }
@@ -193,10 +197,11 @@ object WeiboTextFormatter {
                             isVote = isVote
                         )
                     )
-                    removedInlineLink = true
+                    if (fromText) removedInlineLink = true
                     return
                 }
             }
+            if (!fromText) return
             val linkStyle = SpanStyle(color = primaryColor)
             val linkIconId = "link_icon_${inlineIdCounter++}"
             inlineContentMap[linkIconId] = InlineTextContent(
@@ -215,7 +220,7 @@ object WeiboTextFormatter {
             }
             withLink(LinkAnnotation.Url(url = href, styles = TextLinkStyles(style = linkStyle))) {
                 appendInlineContent(linkIconId, "[link]")
-                append(" ${title ?: href}")
+                append(" ${title ?: label ?: href}")
             }
         }
 
@@ -307,12 +312,12 @@ object WeiboTextFormatter {
             if (lastIndex < preprocessed.length) {
                 append(preprocessed.substring(lastIndex))
             }
-            val page = post?.pageInfo
-            val pageUrl = page?.pageUrl
-            if (videos.isEmpty() && !page?.pageTitle.isNullOrBlank() &&
-                pageUrl != null && parseWebUri(pageUrl) != null
-            ) {
-                appendWebLink(pageUrl)
+            for (link in post?.urlStruct.orEmpty()) {
+                val href = link.shortUrl?.takeIf { parseWebUri(it) != null } ?: link.longUrl
+                if (href != null) appendWebLink(href, fromText = false)
+            }
+            if (videos.isEmpty()) {
+                post?.pageInfo?.pageUrl?.let { appendWebLink(it, fromText = false) }
             }
         }
 

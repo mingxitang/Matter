@@ -73,15 +73,13 @@ class WeiboTextFormatterTest {
         )
 
         val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
-        val text = formatted.annotatedString
-        assertFalse(text.text.contains("t.cn"))
-        val link = text.getLinkAnnotations(0, text.length).single().item as LinkAnnotation.Url
-        assertEquals("https://example.com/article", link.url)
+        assertFalse(formatted.annotatedString.text.contains("t.cn"))
+        assertEquals("https://example.com/article", formatted.shareCards.single().url)
 
         val withoutVideo = WeiboTextFormatter.formatWeiboContent(
             primaryColor = Color.Blue, post = post.copy(pageInfo = null)
-        ).annotatedString
-        assertEquals(2, withoutVideo.getLinkAnnotations(0, withoutVideo.length).size)
+        )
+        assertEquals(listOf("https://t.cn/video", "https://example.com/article"), withoutVideo.shareCards.map { it.url })
     }
 
     @Test
@@ -96,6 +94,7 @@ class WeiboTextFormatterTest {
         val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
         assertTrue(formatted.annotatedString.text.isEmpty())
         assertTrue(formatted.inlineContent.isEmpty())
+        assertTrue(formatted.shareCards.isEmpty())
     }
 
     @Test
@@ -120,7 +119,7 @@ class WeiboTextFormatterTest {
         val fullUrl = "https://example.com/article"
         val post = WeiboStatusDto(
             textRaw = "推荐阅读 $shortUrl",
-            urlStruct = listOf(WeiboUrlDto(shortUrl = shortUrl, longUrl = fullUrl)),
+            urlStruct = listOf(WeiboUrlDto(shortUrl = shortUrl, longUrl = fullUrl, title = "网页链接")),
             pageInfo = WeiboPageInfoDto(
                 pageUrl = fullUrl,
                 pageTitle = "文章标题",
@@ -135,6 +134,44 @@ class WeiboTextFormatterTest {
         assertEquals("文章标题", card.title)
         assertEquals("example.com", card.host)
         assertEquals("https://example.com/cover.jpg", card.coverUrl)
+    }
+
+    @Test
+    fun genericHtmlLinkStillProducesAWebCard() {
+        val post = WeiboStatusDto(text = """看看 <a href="https://example.com/story">网页链接</a>""")
+
+        val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
+
+        assertEquals("看看", formatted.annotatedString.text)
+        assertEquals("网页链接", formatted.shareCards.single().title)
+        assertEquals("example.com", formatted.shareCards.single().host)
+    }
+
+    @Test
+    fun shareMetadataWithoutAnInlineUrlStillProducesACard() {
+        val post = WeiboStatusDto(
+            urlStruct = listOf(WeiboUrlDto(longUrl = "https://example.com/story", title = "网页分享"))
+        )
+
+        val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
+
+        assertEquals("网页分享", formatted.shareCards.single().title)
+        assertTrue(formatted.annotatedString.text.isEmpty())
+    }
+
+    @Test
+    fun weiboVoteAnchorLabelsAPlainTextShortUrl() {
+        val url = "http://t.cn/AXYeQGJ9"
+        val post = WeiboStatusDto(
+            textRaw = "BLG夺冠，你心目中谁的功劳最大？ $url",
+            text = """<a href="$url">元科技的微博投票</a>"""
+        )
+
+        val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
+
+        assertEquals("BLG夺冠，你心目中谁的功劳最大？", formatted.annotatedString.text)
+        assertTrue(formatted.shareCards.single().isVote)
+        assertEquals(url, formatted.shareCards.single().url)
     }
 
     @Test
