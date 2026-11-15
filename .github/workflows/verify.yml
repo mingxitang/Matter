@@ -40,6 +40,13 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest :app:assembleDebug --continue --console=plain
 
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: matter-debug
+          if-no-files-found: error
+          path: app/build/outputs/apk/debug/app-debug.apk
+
       - name: Upload unit test reports
         if: always()
         uses: actions/upload-artifact@v7

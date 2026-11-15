@@ -35,6 +35,10 @@
 - 本地构建的编号可能超前于 CI：未推送的提交也计入提交数。因此**本地包只用于调试，不用于分发**。
 - 工程当前未启用 configuration cache。若将来启用，`providers.exec` 的结果会被缓存，切换提交后编号可能滞后；此时用 `--no-configuration-cache` 或显式 `-PmatterVersionCode` 覆盖。CI 始终显式传参，不受影响。
 
+## 下载调试 APK
+
+在 GitHub Actions 手动运行 **Verify**。通过后在该次运行的 **Artifacts** 下载 `matter-debug`，解压即可找到 `app-debug.apk`。Gradle 自动使用调试密钥签名，无需配置仓库签名 secrets。调试包的包名为 `org.kazusa.matter.debug`，可与正式包同时安装。若两次构建使用不同的调试密钥，需要卸载旧调试包后再安装。
+
 ## 正式发布
 
 正式版只通过 GitHub Actions 触发，不再有本地分发脚本。在 `main` 分支的 Actions 页面手动运行 **Release** workflow（`workflow_dispatch`）：构建成功后自动打 tag `v<版本名>` 并创建 GitHub Release，附 APK、SHA-256 与 `mapping.txt`。
