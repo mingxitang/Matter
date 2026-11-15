@@ -52,6 +52,7 @@ data class WeiboStatusDto(
     @SerialName("original_pic") val originalPic: String? = null,
     @SerialName("thumbnail_pic") val thumbnailPic: String? = null,
     @SerialName("page_info") val pageInfo: WeiboPageInfoDto? = null,
+    @SerialName("url_struct") val urlStruct: List<WeiboUrlDto> = emptyList(),
     /** 图文混排媒体（图片与视频共用一条有序列表），见 [mediaItems] */
     @SerialName("mix_media_info") val mixMediaInfo: WeiboMixMediaInfoDto? = null,
     @SerialName("region_name") val regionName: String? = null,
@@ -295,6 +296,14 @@ data class WeiboPicUrlDto(
     @SerialName("thumbnail_pic") val thumbnailPic: String? = null,
     @SerialName("bmiddle_pic") val bmiddlePic: String? = null,
     @SerialName("original_pic") val originalPic: String? = null
+)
+
+@Serializable
+data class WeiboUrlDto(
+    @SerialName("short_url") val shortUrl: String? = null,
+    @SerialName("long_url") val longUrl: String? = null,
+    @SerialName("url_title") val title: String? = null,
+    @SerialName("object_type") val objectType: String? = null
 )
 
 @Serializable
@@ -959,14 +968,14 @@ fun WeiboSearchCardInfo.classifySearchCard(): SearchResultKind? = when {
 // 而排名从 `realpos:1` 开始 —— 置顶**不计入名次**；「实时上升热点」是另一张卡片（另一个榜段）。
 
 /**
- * 首屏默认榜单（「我的」榜）的 containerid。
+ * 接口默认榜单（「我的」榜）的 containerid。
  *
- * 真实榜单列表以服务端下发的 `channel_list` 为准，这里只是「还没拉到榜单列表时」的初始请求参数。
+ * 真实榜单列表以服务端下发的 `channel_list` 为准，热搜页面单独指定「热搜」榜。
  */
 const val DEFAULT_HOT_SEARCH_CONTAINER_ID =
     "106003_-_type:25_-_filter_type:mineband"
 
-/** 兜底热搜榜（「热搜」榜）的 containerid。若未登录或「我的」请求失败时，可回退到此榜单。 */
+/** 「热搜」榜的 containerid，也是热搜页面的初始请求参数。 */
 const val REALTIME_HOT_SEARCH_CONTAINER_ID =
     "106003type=25&t=3&disable_hot=1&filter_type=realtimehot"
 

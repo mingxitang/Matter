@@ -13,10 +13,10 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material3.Scaffold
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -72,8 +72,6 @@ import org.kazusa.matter.ui.timeline.TimelineViewModel
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.material.icons.filled.Explore
-import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -93,7 +91,7 @@ internal enum class MainTab(
     val unselectedIcon: ImageVector
 ) {
     Timeline("动态", Icons.Filled.Home, Icons.Outlined.Home),
-    Search("热门", Icons.Filled.Explore, Icons.Outlined.Explore),
+    HotSearch("热搜", Icons.Filled.LocalFireDepartment, Icons.Outlined.LocalFireDepartment),
     Profile("我的", Icons.Filled.Person, Icons.Outlined.Person)
 }
 
@@ -146,12 +144,9 @@ fun MainTabsScreen(
         LazyListState()
     }
 
-    // 热门 Tab 的展示模式：热门流 / 微博热搜（悬浮底栏左侧按钮切换）
-    var discoverMode by rememberSaveable { mutableStateOf(DiscoverMode.HOT) }
-
-    // 热门页的列表状态由页面内部持有（每份内容一份，支持交叉淡化），
-    // 这里只镜像「当前可见的那一份」，让底栏隐藏逻辑与动态页完全一致（含“到顶立即显示”）
-    val discoverListState = remember { mutableStateOf<LazyListState?>(null) }
+    var showHotFeed by rememberSaveable { mutableStateOf(false) }
+    val hotFeedListState = remember { mutableStateOf<LazyListState?>(null) }
+    val hotSearchListState = remember { mutableStateOf<LazyListState?>(null) }
 
     // 只把 State 往下传：分类菜单在悬浮层里读取，热门流每加载一页不会带着主框架重组
     val hotFeedState = hotFeedViewModel.uiState.collectAsStateWithLifecycle()
@@ -189,15 +184,6 @@ fun MainTabsScreen(
         }
     }
 
-    // 左侧悬浮按钮：热搜 ↔ 热门。列表状态由各自页面持有，切换后自然从顶部开始
-    val toggleDiscoverMode: () -> Unit = {
-        discoverMode = if (discoverMode == DiscoverMode.HOT) {
-            DiscoverMode.HOT_SEARCH
-        } else {
-            DiscoverMode.HOT
-        }
-    }
-
     // 主框架只关心少量时间线字段；订阅整个 uiState 会导致列表刷新/滚动时整屏重组，
     // 因此用 derivedStateOf 收窄到真正使用的字段。
     val timelineState by timelineViewModel.uiState.collectAsStateWithLifecycle()
@@ -226,7 +212,8 @@ fun MainTabsScreen(
     LaunchedEffect(publishedCount) {
         if (publishedCount > handledPublishCount) {
             handledPublishCount = publishedCount
-            coroutineScope.launch { pagerState.animateScrollToPage(0) }
+            showHotFeed = false
+            coroutineScope.launch { pagerState.animateScrollToPage(MainTab.Timeline.ordinal) }
             timelineViewModel.loadTimeline(isRefresh = true)
         }
     }
@@ -239,16 +226,21 @@ fun MainTabsScreen(
     val scrollThreshold = with(LocalDensity.current) { 32.dp.toPx() }
     val scrollTracker = remember(scrollThreshold) { BottomBarScrollTracker(scrollThreshold) }
     val currentPendingRestore by rememberUpdatedState(pendingRestoreIndex)
+    val currentShowHotFeed by rememberUpdatedState(showHotFeed)
     val bottomBarScrollConnection = remember(pagerState, timelineListState, scrollTracker) {
         object : NestedScrollConnection {
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                 if (source == NestedScrollSource.UserInput) {
-                    // 动态页与热门页走同一套规则：能拿到当前列表状态就顺带判断「是否在顶部」，
+                    // 三个列表走同一套规则：能拿到当前列表状态就顺带判断「是否在顶部」，
                     // 到顶立即显示底栏；否则按滚动增量（32dp 阈值）决定显示 / 隐藏
-                    val activeListState = when (pagerState.currentPage) {
-                        0 -> if (currentPendingRestore == null) timelineListState else null
-                        1 -> discoverListState.value
-                        else -> null
+                    val activeListState = when (MainTab.entries[pagerState.currentPage]) {
+                        MainTab.Timeline -> when {
+                            currentShowHotFeed -> hotFeedListState.value
+                            currentPendingRestore == null -> timelineListState
+                            else -> null
+                        }
+                        MainTab.HotSearch -> hotSearchListState.value
+                        MainTab.Profile -> null
                     }
                     if (activeListState != null) {
                         if (activeListState.firstVisibleItemIndex == 0 &&
@@ -269,7 +261,7 @@ fun MainTabsScreen(
             }
         }
     }
-    LaunchedEffect(pagerState.currentPage, currentGid) {
+    LaunchedEffect(pagerState.currentPage, currentGid, showHotFeed) {
         isBottomBarVisible = true
         isTopBarVisible = true
         scrollTracker.reset()
@@ -308,98 +300,85 @@ fun MainTabsScreen(
                     .nestedScroll(bottomBarScrollConnection)
                     .then(if (bottomBarBackdrop != null) Modifier.layerBackdrop(bottomBarBackdrop) else Modifier)
             ) { page ->
-                // 相邻分页会被预组合（beyondViewportPageCount = 1）：只有当前可见页参与
-                // 共享元素注册，否则同一条微博在「动态」「热门」各注册一份相同 key，
-                // 形变可能从屏幕外那张卡片起飞
+                val isPageVisible = pagerState.currentPage == page
                 CompositionLocalProvider(
-                    LocalSharedTransitionSourceActive provides (pagerState.currentPage == page),
+                    LocalSharedTransitionSourceActive provides isPageVisible,
                     // 信息流分页统一关掉「逐卡文本选区」：SelectionContainer 会为每张卡片
                     // 建一份选区注册器 + 手势节点，一屏十几张是纯开销。
                     // 正文页不受影响（正文与转发原文仍可长按选词复制）。
                     LocalCardTextSelectionEnabled provides false
                 ) {
-                    when (page) {
-                        0 -> {
-                            TimelineScreen(
-                                viewModel = timelineViewModel,
-                                groupViewModel = groupViewModel,
-                                onUserClick = onUserClick,
-                                onPostClick = onPostClick,
-                                onCommentClick = onCommentClick,
-                                onImageClick = onImageClick,
-                                onVideoClick = onVideoClick,
-                                onMentionClick = onMentionClick,
-                                onTopicClick = onTopicClick,
-                                onSearchClick = onOpenSearch,
-                                onLogout = onLogout,
-                                onNavigateToGroups = onNavigateToGroups,
-                                listState = timelineListState,
-                                backdrop = timelineBackdrop,
-                                bottomBarPadding = bottomBarPadding,
-                                // 只在本页可见作用域里读这两个状态：顶栏显隐切换只重组本页，
-                                // 不带着主框架与另外两页一起重组
-                                topBarHidden = topBarAutoHide && !isTopBarVisible,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        1 -> {
-                            // 热搜 ↔ 热门切换：两个页面都自带列表状态，可以安全地同时组合，做真正的交叉淡化
-                            AnimatedContent(
-                                targetState = discoverMode,
-                                transitionSpec = {
-                                    fadeIn(animationSpec = tween(240)) togetherWith
-                                        fadeOut(animationSpec = tween(160))
-                                },
-                                label = "DiscoverMode",
-                                modifier = Modifier.fillMaxSize()
-                            ) { mode ->
-                                when (mode) {
-                                    DiscoverMode.HOT -> {
-                                        HotFeedScreen(
-                                            viewModel = hotFeedViewModel,
-                                            onUserClick = onUserClick,
-                                            onPostClick = onPostClick,
-                                            onCommentClick = onCommentClick,
-                                            onImageClick = onImageClick,
-                                            onVideoClick = onVideoClick,
-                                            onMentionClick = onMentionClick,
-                                            onTopicClick = onTopicClick,
-                                            // 过渡期间只有当前模式参与顶栏模糊采样，避免两层同时写入同一张 backdrop
-                                            backdrop = searchBackdrop.takeIf { mode == discoverMode },
-                                            bottomBarPadding = bottomBarPadding,
-                                            topBarHidden = topBarAutoHide && !isTopBarVisible,
-                                            isActive = mode == discoverMode,
-                                            // 相邻分页会被预组合，只有本页真正可见时才允许它发首屏请求
-                                            isPageVisible = pagerState.currentPage == page,
-                                            onActiveListStateChanged = { state ->
-                                                if (discoverListState.value !== state) {
-                                                    discoverListState.value = state
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    }
-
-                                    DiscoverMode.HOT_SEARCH -> {
-                                        HotSearchScreen(
-                                            hotSearchViewModel = hotSearchViewModel,
-                                            onSearchSubmit = onSearchSubmit,
-                                            backdrop = searchBackdrop.takeIf { mode == discoverMode },
-                                            bottomBarPadding = bottomBarPadding,
-                                            topBarHidden = topBarAutoHide && !isTopBarVisible,
-                                            isActive = mode == discoverMode,
-                                            onActiveListStateChanged = { state ->
-                                                if (discoverListState.value !== state) {
-                                                    discoverListState.value = state
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    }
+                    when (MainTab.entries[page]) {
+                        MainTab.Timeline -> AnimatedContent(
+                            targetState = showHotFeed,
+                            transitionSpec = {
+                                fadeIn(animationSpec = tween(240)) togetherWith
+                                    fadeOut(animationSpec = tween(160))
+                            },
+                            label = "TimelineMode",
+                            modifier = Modifier.fillMaxSize()
+                        ) { hotFeed ->
+                            val isCurrentMode = hotFeed == showHotFeed
+                            // 淡出中的列表不再注册共享元素，避免同一条微博出现两个形变来源。
+                            CompositionLocalProvider(
+                                LocalSharedTransitionSourceActive provides (isPageVisible && isCurrentMode)
+                            ) {
+                                if (hotFeed) {
+                                    HotFeedScreen(
+                                        viewModel = hotFeedViewModel,
+                                        onUserClick = onUserClick,
+                                        onPostClick = onPostClick,
+                                        onCommentClick = onCommentClick,
+                                        onImageClick = onImageClick,
+                                        onVideoClick = onVideoClick,
+                                        onMentionClick = onMentionClick,
+                                        onTopicClick = onTopicClick,
+                                        backdrop = timelineBackdrop.takeIf { isCurrentMode },
+                                        bottomBarPadding = bottomBarPadding,
+                                        topBarHidden = topBarAutoHide && !isTopBarVisible,
+                                        isActive = isCurrentMode,
+                                        isPageVisible = isPageVisible && isCurrentMode,
+                                        onActiveListStateChanged = { state ->
+                                            if (hotFeedListState.value !== state) {
+                                                hotFeedListState.value = state
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    TimelineScreen(
+                                        viewModel = timelineViewModel,
+                                        groupViewModel = groupViewModel,
+                                        onUserClick = onUserClick,
+                                        onPostClick = onPostClick,
+                                        onCommentClick = onCommentClick,
+                                        onImageClick = onImageClick,
+                                        onVideoClick = onVideoClick,
+                                        onMentionClick = onMentionClick,
+                                        onTopicClick = onTopicClick,
+                                        onSearchClick = onOpenSearch,
+                                        onLogout = onLogout,
+                                        onNavigateToGroups = onNavigateToGroups,
+                                        listState = timelineListState,
+                                        backdrop = timelineBackdrop.takeIf { isCurrentMode },
+                                        bottomBarPadding = bottomBarPadding,
+                                        topBarHidden = topBarAutoHide && !isTopBarVisible,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
                                 }
                             }
                         }
-                        2 -> {
+                        MainTab.HotSearch -> HotSearchScreen(
+                            hotSearchViewModel = hotSearchViewModel,
+                            onSearchSubmit = onSearchSubmit,
+                            backdrop = searchBackdrop,
+                            bottomBarPadding = bottomBarPadding,
+                            topBarHidden = topBarAutoHide && !isTopBarVisible,
+                            isActive = isPageVisible,
+                            onActiveListStateChanged = { hotSearchListState.value = it },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        MainTab.Profile -> {
                             ProfileScreen(
                                 authPreferences = authPreferences,
                                 authRepository = authRepository,
@@ -420,25 +399,26 @@ fun MainTabsScreen(
                 }
             }
 
-            // 悬浮底栏（胶囊 + 两侧悬浮按钮）叠在分页内容之上：热门 Tab 两侧是模式切换 / 分类菜单，
-            // 动态 Tab 右侧是「发微博」。这一层不持有任何手势，点击会照常落到下面的内容区。
+            // 悬浮底栏叠在分页内容上，左右按钮随当前页面切换。
             MainBottomBarLayer(
                 pagerState = pagerState,
                 visible = isBottomBarVisible,
                 unreadCount = unreadCount,
                 backdrop = bottomBarBackdrop,
-                discoverMode = discoverMode,
+                showHotFeed = showHotFeed,
                 hotFeedUiState = hotFeedState,
                 hotSearchViewModel = hotSearchViewModel,
-                onToggleDiscoverMode = toggleDiscoverMode,
+                onToggleTimelineMode = { showHotFeed = !showHotFeed },
                 onHotCategorySelected = { category ->
                     hotFeedViewModel.selectCategory(category)
                 },
                 onHotSearchChannelSelected = selectHotSearchChannel,
                 onComposeClick = onNavigateToComposer,
                 onReselect = { index ->
-                    when (index) {
-                        0 -> coroutineScope.launch {
+                    when (MainTab.entries[index]) {
+                        MainTab.Timeline -> if (showHotFeed) {
+                            hotFeedViewModel.refresh()
+                        } else coroutineScope.launch {
                             val isAtTop = timelineListState.firstVisibleItemIndex == 0 &&
                                 timelineListState.firstVisibleItemScrollOffset < 10
                             if (isAtTop) {
@@ -452,15 +432,8 @@ fun MainTabsScreen(
                                 timelineListState.animateScrollToItem(0)
                             }
                         }
-                        1 -> {
-                            // 热门页的列表状态在页面内部（切换会换新列表、从顶部开始），
-                            // 再次点击 Tab 直接刷新当前模式的内容
-                            if (discoverMode == DiscoverMode.HOT) {
-                                hotFeedViewModel.refresh()
-                            } else {
-                                hotSearchViewModel.refresh()
-                            }
-                        }
+                        MainTab.HotSearch -> hotSearchViewModel.refresh()
+                        MainTab.Profile -> Unit
                     }
                 }
             )

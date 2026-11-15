@@ -4,6 +4,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.LinkAnnotation
 import org.junit.Assert.*
 import org.junit.Test
+import org.kazusa.matter.data.model.WeiboMediaInfoDto
+import org.kazusa.matter.data.model.WeiboPageInfoDto
+import org.kazusa.matter.data.model.WeiboStatusDto
+import org.kazusa.matter.data.model.WeiboUrlDto
 
 class WeiboTextFormatterTest {
     @Test
@@ -56,6 +60,56 @@ class WeiboTextFormatterTest {
         val link = formatted.annotatedString.getLinkAnnotations(0, formatted.annotatedString.length).single().item as LinkAnnotation.Url
         assertEquals("https://m.weibo.cn/detail/123", link.url)
         assertTrue(formatted.annotatedString.text.endsWith(" A|B"))
+    }
+
+    @Test
+    fun playableVideoHidesItsShortLinkButKeepsOtherLinks() {
+        val post = WeiboStatusDto(
+            textRaw = "看看 https://t.cn/video 和 https://example.com/article",
+            pageInfo = WeiboPageInfoDto(
+                mediaInfo = WeiboMediaInfoDto(streamUrl = "https://video.weibo.com/example.mp4")
+            ),
+            urlStruct = listOf(WeiboUrlDto(shortUrl = "https://t.cn/video", objectType = "video"))
+        )
+
+        val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
+        val text = formatted.annotatedString
+        assertFalse(text.text.contains("t.cn"))
+        val link = text.getLinkAnnotations(0, text.length).single().item as LinkAnnotation.Url
+        assertEquals("https://example.com/article", link.url)
+
+        val withoutVideo = WeiboTextFormatter.formatWeiboContent(
+            primaryColor = Color.Blue, post = post.copy(pageInfo = null)
+        ).annotatedString
+        assertEquals(2, withoutVideo.getLinkAnnotations(0, withoutVideo.length).size)
+    }
+
+    @Test
+    fun playableVideoHidesHtmlVideoAnchor() {
+        val post = WeiboStatusDto(
+            text = """<a href="https://weibo.com/tv/show/1034:123">微博视频</a>""",
+            pageInfo = WeiboPageInfoDto(
+                mediaInfo = WeiboMediaInfoDto(streamUrl = "https://video.weibo.com/example.mp4")
+            )
+        )
+
+        val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
+        assertTrue(formatted.annotatedString.text.isEmpty())
+        assertTrue(formatted.inlineContent.isEmpty())
+    }
+
+    @Test
+    fun structuredVoteLinkUsesThePollTitleAndOpensItsOriginalLink() {
+        val url = "https://t.cn/poll"
+        val post = WeiboStatusDto(
+            textRaw = url,
+            urlStruct = listOf(WeiboUrlDto(shortUrl = url, title = "你选哪项？", objectType = "vote"))
+        )
+
+        val text = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post).annotatedString
+        assertTrue(text.text.endsWith("参与投票 · 你选哪项？"))
+        val link = text.getLinkAnnotations(0, text.length).single().item as LinkAnnotation.Url
+        assertEquals(url, link.url)
     }
 
     @Test

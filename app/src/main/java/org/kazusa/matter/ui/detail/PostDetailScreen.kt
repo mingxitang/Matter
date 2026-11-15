@@ -777,10 +777,10 @@ private fun PostDetailBody(
             // 微博正文 (宽松舒适的阅读体验，高亮并支持点击@博主、#话题#、网页链接与表情图标)
             val primaryColor = MaterialTheme.colorScheme.primary
             val onlineEmojiImages = LocalOnlineEmojiImages.current
-            val contentFormatted = remember(post.textRaw, post.text, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
+            val contentFormatted = remember(post.textRaw, post.text, post.mediaItems, post.urlStruct, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
                 WeiboTextFormatter.formatWeiboContent(
                     emojiImages = onlineEmojiImages,
-                    rawText = post.textRaw ?: post.text,
+                    post = post,
                     primaryColor = primaryColor,
                     onMentionClick = onMentionClick,
                     onTopicClick = onTopicClick
@@ -849,10 +849,10 @@ private fun PostDetailBody(
                 val retweetPrimaryColor = MaterialTheme.colorScheme.primary
                 val authorLinkBaseSpan = MaterialTheme.typography.bodyMediumEmphasized.toSpanStyle()
                 val onlineEmojiImages = LocalOnlineEmojiImages.current
-                val bodyFormatted = remember(retweet.textRaw, retweet.text, retweetPrimaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
+                val bodyFormatted = remember(retweet.textRaw, retweet.text, retweet.mediaItems, retweet.urlStruct, retweetPrimaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
                     WeiboTextFormatter.formatWeiboContent(
                         emojiImages = onlineEmojiImages,
-                        rawText = retweet.textRaw ?: retweet.text,
+                        post = retweet,
                         primaryColor = retweetPrimaryColor,
                         onMentionClick = onMentionClick,
                         onTopicClick = onTopicClick

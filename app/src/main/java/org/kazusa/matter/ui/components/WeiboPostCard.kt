@@ -311,10 +311,10 @@ private fun PostCardContent(
             // HTML 解码 + AnnotatedString 构建开销较大，按文本内容缓存，避免每次重组重跑
             val primaryColor = MaterialTheme.colorScheme.primary
             val onlineEmojiImages = LocalOnlineEmojiImages.current
-            val contentFormatted = remember(post.textRaw, post.text, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
+            val contentFormatted = remember(post.textRaw, post.text, post.mediaItems, post.urlStruct, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
                 WeiboTextFormatter.formatWeiboContent(
                     emojiImages = onlineEmojiImages,
-                    rawText = post.textRaw ?: post.text,
+                    post = post,
                     primaryColor = primaryColor,
                     onMentionClick = onMentionClick,
                     onTopicClick = onTopicClick
@@ -456,10 +456,10 @@ private fun RetweetCard(
         val primaryColor = MaterialTheme.colorScheme.primary
         val authorLinkBaseSpan = MaterialTheme.typography.bodyMediumEmphasized.toSpanStyle()
         val onlineEmojiImages = LocalOnlineEmojiImages.current
-        val bodyFormatted = remember(retweet.textRaw, retweet.text, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
+        val bodyFormatted = remember(retweet.textRaw, retweet.text, retweet.mediaItems, retweet.urlStruct, primaryColor, onMentionClick, onTopicClick, onlineEmojiImages) {
             WeiboTextFormatter.formatWeiboContent(
                 emojiImages = onlineEmojiImages,
-                rawText = retweet.textRaw ?: retweet.text,
+                post = retweet,
                 primaryColor = primaryColor,
                 onMentionClick = onMentionClick,
                 onTopicClick = onTopicClick

@@ -56,17 +56,18 @@ class HotSearchBoardViewModelTest {
     private val channelB = HotSearchChannel(name = "B 榜", containerid = "B")
 
     @Test
-    fun emptyDefaultBoardFallsBackToRealtimeBoard() = runTest {
+    fun firstLoadSelectsRealtimeBoardEvenWhenMineIsListedFirst() = runTest {
         val requested = mutableListOf<String>()
+        val mine = HotSearchChannel(name = "我的", containerid = DEFAULT_HOT_SEARCH_CONTAINER_ID)
+        val realtime = HotSearchChannel(
+            name = "热搜",
+            containerid = REALTIME_HOT_SEARCH_CONTAINER_ID + "&source=test"
+        )
         val vm = keep(
             HotSearchBoardViewModel(
                 FakeRepository { containerId, _ ->
                     requested += containerId
-                    if (containerId == DEFAULT_HOT_SEARCH_CONTAINER_ID) {
-                        ApiResult.Success(HotSearchBoard())
-                    } else {
-                        ApiResult.Success(board("热门话题"))
-                    }
+                    ApiResult.Success(board("实时热点").copy(channels = listOf(mine, realtime)))
                 }
             )
         )
@@ -74,36 +75,16 @@ class HotSearchBoardViewModelTest {
         vm.loadIfNeeded()
         advanceUntilIdle()
 
-        assertEquals(
-            listOf(DEFAULT_HOT_SEARCH_CONTAINER_ID, REALTIME_HOT_SEARCH_CONTAINER_ID),
-            requested
-        )
-        assertEquals(REALTIME_HOT_SEARCH_CONTAINER_ID, vm.uiState.value.selectedContainerId)
+        assertEquals(listOf(REALTIME_HOT_SEARCH_CONTAINER_ID), requested)
+        assertEquals(realtime, vm.uiState.value.selectedChannel)
+        assertEquals("实时热点", vm.uiState.value.board.sections.single().items.single().title)
         assertTrue(vm.uiState.value.hasLoaded)
-        assertEquals("热门话题", vm.uiState.value.board.sections.single().items.single().title)
-        assertFalse(vm.uiState.value.isLoading)
-    }
 
-    @Test
-    fun failedDefaultBoardFallsBackToRealtimeBoard() = runTest {
-        val vm = keep(
-            HotSearchBoardViewModel(
-                FakeRepository { containerId, _ ->
-                    if (containerId == DEFAULT_HOT_SEARCH_CONTAINER_ID) {
-                        ApiResult.Error(message = "需要登录")
-                    } else {
-                        ApiResult.Success(board("热搜兜底"))
-                    }
-                }
-            )
-        )
-
-        vm.loadIfNeeded()
+        vm.select(mine)
         advanceUntilIdle()
 
-        assertEquals(REALTIME_HOT_SEARCH_CONTAINER_ID, vm.uiState.value.selectedContainerId)
-        assertEquals("热搜兜底", vm.uiState.value.board.sections.single().items.single().title)
-        assertTrue(vm.uiState.value.hasLoaded)
+        assertEquals(listOf(REALTIME_HOT_SEARCH_CONTAINER_ID, mine.containerid), requested)
+        assertEquals(mine, vm.uiState.value.selectedChannel)
     }
 
     @Test
@@ -120,13 +101,12 @@ class HotSearchBoardViewModelTest {
 
         vm.loadIfNeeded()
         advanceUntilIdle()
-        // 默认榜 + 兜底热搜榜各一次，且没有标记成「已加载」
-        assertEquals(2, calls)
+        assertEquals(1, calls)
         assertFalse(vm.uiState.value.hasLoaded)
 
         vm.loadIfNeeded()
         advanceUntilIdle()
-        assertEquals(4, calls)
+        assertEquals(2, calls)
     }
 
     @Test

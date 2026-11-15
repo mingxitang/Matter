@@ -19,6 +19,8 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import org.kazusa.matter.data.model.StatusMediaItem
+import org.kazusa.matter.data.model.WeiboStatusDto
 
 data class FormattedWeiboText(
     val annotatedString: AnnotatedString,
@@ -57,6 +59,13 @@ object WeiboTextFormatter {
     private val sinaUserLinkRegex = Regex("""[?&]uid=(\d+)(?:&|$)""")
     private val htmlEntityRegex = Regex("""&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos|nbsp);""")
 
+    private val weiboVideoPage = Regex(
+        """^https?://(?:(?:www\.|m\.)?weibo\.(?:com|cn)/tv/(?:show|v)/|video\.weibo\.com/)""",
+        RegexOption.IGNORE_CASE
+    )
+    private val weiboVotePage = Regex("""^https?://vote\.weibo\.(?:com|cn)(?:[/?#]|$)""", RegexOption.IGNORE_CASE)
+    private val weiboShortLink = Regex("""^https?://t\.cn/""", RegexOption.IGNORE_CASE)
+
     fun formatHtmlText(html: String?): String {
         if (html.isNullOrBlank()) return ""
         return html
@@ -79,19 +88,21 @@ object WeiboTextFormatter {
      * 3. 互动高亮：高亮博主昵称（@xxx）与话题（#xxx#），支持点击交互事件。
      */
     fun formatWeiboContent(
-        rawText: String?,
+        rawText: String? = null,
         primaryColor: Color,
         onMentionClick: ((String) -> Unit)? = null,
         onTopicClick: ((String) -> Unit)? = null,
-        emojiImages: Map<String, String> = emptyMap()
+        emojiImages: Map<String, String> = emptyMap(),
+        post: WeiboStatusDto? = null
     ): FormattedWeiboText {
-        if (rawText.isNullOrBlank()) {
+        val source = post?.let { it.textRaw ?: it.text } ?: rawText
+        if (source.isNullOrBlank()) {
             return FormattedWeiboText(AnnotatedString(""))
         }
 
         // 1. 动态提取 HTML 中的表情图片 (如 <img ... alt="[doge]" src="//h5.sinaimg.cn/..." />)
         val dynamicEmojiMap = mutableMapOf<String, String>()
-        var preprocessed = imgTagRegex.replace(rawText) { matchResult ->
+        var preprocessed = imgTagRegex.replace(source) { matchResult ->
             val alt = matchResult.groups["alt"]?.value ?: matchResult.groups["alt2"]?.value ?: ""
             var src = matchResult.groups["src"]?.value ?: matchResult.groups["src2"]?.value ?: ""
             if (src.startsWith("//")) {
@@ -106,9 +117,7 @@ object WeiboTextFormatter {
         // HTML 的博主、话题链接保留完整标题（包括昵称中的标点），并记录站内目标。
         val htmlLinks = mutableListOf<Pair<String, String>>()
         preprocessed = anchorTagRegex.replace(preprocessed) { match ->
-            val hrefMatch = hrefAttrRegex.find(match.groupValues[1])
-            val href = decodeEntities(hrefMatch?.groups?.get(1)?.value ?: hrefMatch?.groups?.get(2)?.value.orEmpty())
-            val title = decodeEntities(match.groupValues[2].replace(htmlTagRegex, "")).trim().ifBlank { "网页链接" }
+            val (href, title) = readAnchor(match)
             val index = htmlLinks.size
             htmlLinks += href to title
             "\uFFF9LINK|$index\uFFFA"
@@ -126,8 +135,62 @@ object WeiboTextFormatter {
             }
         }
 
+        val videos = post?.mediaItems.orEmpty().filterIsInstance<StatusMediaItem.Video>()
+        val originalLinkTitles = if (videos.isNotEmpty() && post?.text != source) {
+            anchorTagRegex.findAll(post?.text.orEmpty()).map(::readAnchor).toMap()
+        } else {
+            emptyMap()
+        }
+        var hidVideoLink = false
+
         val inlineContentMap = mutableMapOf<String, InlineTextContent>()
         var inlineIdCounter = 0
+
+        fun AnnotatedString.Builder.appendWebLink(href: String, label: String? = null) {
+            val link = post?.urlStruct?.firstOrNull { it.shortUrl == href || it.longUrl == href }
+            val title = link?.title?.takeIf { it.isNotBlank() } ?: label ?: originalLinkTitles[href]
+            val target = link?.longUrl?.takeIf { it.isNotBlank() } ?: href
+            if (videos.isNotEmpty()) {
+                val isVideoLink = link?.objectType.equals("video", ignoreCase = true) ||
+                    weiboVideoPage.containsMatchIn(target) ||
+                    videos.any { it.videoUrl == target || it.streams.any { stream -> stream.url == target } } ||
+                    (weiboShortLink.containsMatchIn(href) &&
+                        (title == "微博视频" || title?.endsWith("的微博视频") == true))
+                if (isVideoLink) {
+                    hidVideoLink = true
+                    return
+                }
+            }
+
+            val isVote = link?.objectType.equals("vote", ignoreCase = true) ||
+                weiboVotePage.containsMatchIn(target)
+            val displayTitle = if (post != null && isVote) {
+                title?.takeUnless { it == "网页链接" || it == "微博投票" || it == "投票" }
+                    ?.let { "参与投票 · $it" } ?: "参与投票"
+            } else {
+                title ?: href
+            }
+            val linkStyle = SpanStyle(color = primaryColor)
+            val linkIconId = "link_icon_${inlineIdCounter++}"
+            inlineContentMap[linkIconId] = InlineTextContent(
+                Placeholder(
+                    width = 15.sp,
+                    height = 15.sp,
+                    placeholderVerticalAlign = PlaceholderVerticalAlign.Center
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Link,
+                    contentDescription = "网页链接",
+                    tint = primaryColor,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            withLink(LinkAnnotation.Url(url = href, styles = TextLinkStyles(style = linkStyle))) {
+                appendInlineContent(linkIconId, "[link]")
+                append(" $displayTitle")
+            }
+        }
 
         val annotated = buildAnnotatedString {
             // 匹配模式：HTML链接标记、原生URL链接、微博表情标签、@昵称、#话题#（见顶层 tokenRegex）
@@ -173,61 +236,11 @@ object WeiboTextFormatter {
                             lastIndex = range.last + 1
                             return@forEach
                         }
-                        val linkStyle = SpanStyle(color = primaryColor)
-                        val linkIconId = "link_icon_${inlineIdCounter++}"
-                        inlineContentMap[linkIconId] = InlineTextContent(
-                            Placeholder(
-                                width = 15.sp,
-                                height = 15.sp,
-                                placeholderVerticalAlign = PlaceholderVerticalAlign.Center
-                            )
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Link,
-                                contentDescription = "网页链接",
-                                tint = primaryColor,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        withLink(
-                            LinkAnnotation.Url(
-                                url = href,
-                                styles = TextLinkStyles(style = linkStyle)
-                            )
-                        ) {
-                            appendInlineContent(linkIconId, "[link]")
-                            append(" $title")
-                        }
+                        appendWebLink(href, title)
                     }
 
                     // 原生 URL 链接
-                    token.startsWith("http://") || token.startsWith("https://") -> {
-                        val linkStyle = SpanStyle(color = primaryColor)
-                        val linkIconId = "link_icon_${inlineIdCounter++}"
-                        inlineContentMap[linkIconId] = InlineTextContent(
-                            Placeholder(
-                                width = 15.sp,
-                                height = 15.sp,
-                                placeholderVerticalAlign = PlaceholderVerticalAlign.Center
-                            )
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Link,
-                                contentDescription = "网页链接",
-                                tint = primaryColor,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        withLink(
-                            LinkAnnotation.Url(
-                                url = token,
-                                styles = TextLinkStyles(style = linkStyle)
-                            )
-                        ) {
-                            appendInlineContent(linkIconId, "[link]")
-                            append(" $token")
-                        }
-                    }
+                    token.startsWith("http://") || token.startsWith("https://") -> appendWebLink(token)
 
                     // 微博表情图标
                     token.startsWith("[") && token.endsWith("]") -> {
@@ -269,10 +282,24 @@ object WeiboTextFormatter {
             }
         }
 
+        val visibleText = if (hidVideoLink) {
+            val trimmed = annotated.text.trim()
+            val start = if (trimmed.isEmpty()) 0 else annotated.text.indexOf(trimmed)
+            annotated.subSequence(start, start + trimmed.length)
+        } else {
+            annotated
+        }
         return FormattedWeiboText(
-            annotatedString = annotated,
+            annotatedString = visibleText,
             inlineContent = inlineContentMap
         )
+    }
+
+    private fun readAnchor(match: MatchResult): Pair<String, String> {
+        val hrefMatch = hrefAttrRegex.find(match.groupValues[1])
+        val href = decodeEntities(hrefMatch?.groups?.get(1)?.value ?: hrefMatch?.groups?.get(2)?.value.orEmpty())
+        val title = decodeEntities(match.groupValues[2].replace(htmlTagRegex, "")).trim().ifBlank { "网页链接" }
+        return href to title
     }
 
     private fun userIdFromLink(href: String): String? =

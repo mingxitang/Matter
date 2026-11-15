@@ -107,8 +107,8 @@ fun HotSearchScreen(
         ?: "微博热搜"
 
     // 初始加载热搜（下拉刷新走 PullToRefreshBox → hotSearchViewModel.refresh()）
-    LaunchedEffect(Unit) {
-        hotSearchViewModel.loadIfNeeded()
+    LaunchedEffect(isActive) {
+        if (isActive) hotSearchViewModel.loadIfNeeded()
     }
 
     Scaffold(

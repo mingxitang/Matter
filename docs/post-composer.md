@@ -5,8 +5,7 @@
 
 ## 入口与页面
 
-- 入口：动态页悬浮底栏右侧的圆形写作按钮（`MainBottomBarLayer`，与热门 Tab 的右侧按钮同一套定位与尺寸，
-  胶囊会为它横向压缩让位；不随页面滚动画成独立悬浮层）。
+- 入口：动态模式下悬浮底栏右侧的圆形写作按钮（`MainBottomBarLayer`）。切到热门模式后，同一位置显示热门分类按钮。
 - 路由：`Screen.PostComposer`（`Destinations.kt`），全屏编辑器，离开即销毁（NavEntry 级 ViewModel）。
 - 页面：`ui/composer/post/PostComposerScreen.kt`
   - 顶栏：取消（有内容时二次确认放弃）、字数 `n/2000`、发布；

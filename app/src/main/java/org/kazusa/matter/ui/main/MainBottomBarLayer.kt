@@ -18,9 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Explore
-import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.outlined.Explore
-import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material3.Badge
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -59,9 +58,6 @@ import org.kazusa.matter.ui.hotfeed.HotFeedUiState
 import org.kazusa.matter.ui.media.morph.MORPH_SETTLE_SPEC
 import org.kazusa.matter.ui.search.HotSearchBoardViewModel
 
-/** 「热门」Tab 当前的展示模式：热门流 / 微博热搜榜。 */
-internal enum class DiscoverMode { HOT, HOT_SEARCH }
-
 /** 底栏行的声明高度：与胶囊的视觉高度对齐，用于内容避让与隐藏动画的距离。 */
 internal val BAR_ROW_HEIGHT = 56.dp
 
@@ -83,11 +79,8 @@ private val BAR_BUTTON_CENTER_INSET = 0.dp
 /**
  * 悬浮底栏层（全屏 overlay）：胶囊 + 左右两颗悬浮按钮。
  *
- * - **左侧按钮**：在「热门流」与「微博热搜」之间切换（只在热门 Tab 显示）；
- * - **右侧按钮**：热门 Tab 展开当前模式的分类菜单 ——
- *   热门模式列出热门流分类（热门 / 同城 / 明星…），热搜模式列出热搜榜单（热搜 / 文娱 / 同城…）；
- *   动态 Tab 则是「发微博」入口，与热门 Tab 的右侧按钮同位同尺寸；
- * - 两侧按钮只在各自的 Tab 出现；底栏胶囊会在按钮出现时横向压缩让位。
+ * - 左侧按钮在动态与热门之间切换。
+ * - 右侧按钮在动态模式下打开发微博，在热门或热搜中打开各自的分类菜单。
  */
 @Composable
 internal fun MainBottomBarLayer(
@@ -96,13 +89,12 @@ internal fun MainBottomBarLayer(
     unreadCount: Int,
     backdrop: LayerBackdrop?,
     onReselect: (Int) -> Unit,
-    discoverMode: DiscoverMode,
+    showHotFeed: Boolean,
     hotFeedUiState: State<HotFeedUiState>,
     hotSearchViewModel: HotSearchBoardViewModel,
-    onToggleDiscoverMode: () -> Unit,
+    onToggleTimelineMode: () -> Unit,
     onHotCategorySelected: (HotFeedCategory) -> Unit,
     onHotSearchChannelSelected: (HotSearchChannel) -> Unit,
-    /** 「发微博」入口：只在动态 Tab 出现，位置与热门 Tab 的右侧按钮一致。 */
     onComposeClick: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -111,7 +103,9 @@ internal fun MainBottomBarLayer(
     val navigationBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     val selectedIndex = pagerState.currentPage
-    val discoverPage = MainTab.Search.ordinal
+    val isTimelineActive = selectedIndex == MainTab.Timeline.ordinal
+    val isHotSearchActive = selectedIndex == MainTab.HotSearch.ordinal
+    val isHotFeedActive = isTimelineActive && showHotFeed
 
     // 只订阅「分类列表 + 当前选中项」，热门流每加载一页不会带着底栏一起重组
     val hotCategories by remember(hotFeedUiState) {
@@ -122,28 +116,25 @@ internal fun MainBottomBarLayer(
     }
 
     val hotSearchUi by hotSearchViewModel.uiState.collectAsStateWithLifecycle()
-    val isHotMode = discoverMode == DiscoverMode.HOT
-    val categoryLabels: List<String> = if (isHotMode) {
+    val categoryLabels: List<String> = if (isHotFeedActive) {
         hotCategories.map { it.title }
     } else {
         hotSearchUi.channels.map { it.name }
     }
-    val selectedCategoryIndex: Int = if (isHotMode) {
+    val selectedCategoryIndex: Int = if (isHotFeedActive) {
         hotCategories.indexOfFirst { it.containerId == hotSelectedContainerId }
     } else {
         hotSearchUi.channels.indexOfFirst { it.containerid == hotSearchUi.selectedContainerId }
     }
 
-    val isDiscoverActive = selectedIndex == discoverPage
-    // 动态 Tab 的右侧按钮是「发微博」：位置、尺寸都跟热门 Tab 的右侧按钮同一套几何，
-    // 因此胶囊也要为它让位（否则窄屏上会和胶囊右缘重叠）。
-    val isComposeActive = selectedIndex == MainTab.Timeline.ordinal
-    val sideButtonActive = isDiscoverActive || isComposeActive
+    val isCategoryActive = isHotFeedActive || isHotSearchActive
+    val isComposeActive = isTimelineActive && !showHotFeed
+    val sideButtonActive = isTimelineActive || isHotSearchActive
 
     // 分类菜单的展开状态只服务于这一层：返回键收起、切 Tab / 切模式收起
     var menuExpanded by remember { mutableStateOf(false) }
     BackHandler(enabled = menuExpanded) { menuExpanded = false }
-    LaunchedEffect(selectedIndex, discoverMode) { menuExpanded = false }
+    LaunchedEffect(selectedIndex, showHotFeed) { menuExpanded = false }
 
     // 下滑隐藏：整层一起位移淡出（距离含导航栏，保证完全移出屏幕）
     val barHeightPx = with(density) {
@@ -159,29 +150,16 @@ internal fun MainBottomBarLayer(
     val menuProgress = animateFloatAsState(
         targetValue = if (menuExpanded) 1f else 0f,
         animationSpec = MORPH_SETTLE_SPEC,
-        label = "DiscoverCategoryMenuMorph"
+        label = "CategoryMenuMorph"
     )
 
-    // 热门 Tab 的图标 / 文案跟随当前模式：热门流显示「热门」，微博热搜显示「热搜」。
-    // 两种模式的标题都是两字，胶囊宽度不变，切换时不会带着底栏一起跳动。
-    val navItems = remember(discoverMode) {
-        val discoverTitle = if (discoverMode == DiscoverMode.HOT) "热门" else "热搜"
-        val discoverIcon = if (discoverMode == DiscoverMode.HOT) {
-            Icons.Outlined.Explore
-        } else {
-            Icons.Outlined.LocalFireDepartment
-        }
-        val discoverSelectedIcon = if (discoverMode == DiscoverMode.HOT) {
-            Icons.Filled.Explore
-        } else {
-            Icons.Filled.LocalFireDepartment
-        }
-        MainTab.entries.mapIndexed { index, tab ->
-            if (index == MainTab.Search.ordinal) {
+    val navItems = remember(showHotFeed) {
+        MainTab.entries.map { tab ->
+            if (tab == MainTab.Timeline && showHotFeed) {
                 LiquidNavItem(
-                    title = discoverTitle,
-                    icon = discoverIcon,
-                    selectedIcon = discoverSelectedIcon
+                    title = "热门",
+                    icon = Icons.Outlined.Explore,
+                    selectedIcon = Icons.Filled.Explore
                 )
             } else {
                 LiquidNavItem(
@@ -216,17 +194,23 @@ internal fun MainBottomBarLayer(
     val buttonOffsetX = fullCapsuleWidth * capsuleScale / 2 + BAR_BUTTON_GAP + BAR_BUTTON_SIZE / 2
 
     // 1 = 已完全显示；0 = 隐去收起。采用果冻弹簧，保留过冲回弹带来鲜活 Q 弹质感
-    val buttonReveal by animateFloatAsState(
-        targetValue = if (isDiscoverActive) 1f else 0f,
-        animationSpec = if (isDiscoverActive) {
+    val categoryReveal by animateFloatAsState(
+        targetValue = if (isCategoryActive) 1f else 0f,
+        animationSpec = if (isCategoryActive) {
             spring(stiffness = 280f, dampingRatio = 0.62f)
         } else {
             spring(stiffness = 340f, dampingRatio = 0.68f)
         },
-        label = "DiscoverButtonsReveal"
+        label = "CategoryButtonReveal"
     )
 
-    // 「发微博」按钮的显隐：与热门 Tab 两侧按钮同一套果冻弹簧，切 Tab 时自然弹入 / 缩回
+    val timelineToggleReveal by animateFloatAsState(
+        targetValue = if (isTimelineActive) 1f else 0f,
+        animationSpec = spring(stiffness = 280f, dampingRatio = 0.62f),
+        label = "TimelineToggleReveal"
+    )
+
+    // 「发微博」与分类按钮共用右侧位置，切换时分别弹入和收回。
     val composeReveal by animateFloatAsState(
         targetValue = if (isComposeActive) 1f else 0f,
         animationSpec = if (isComposeActive) {
@@ -249,7 +233,7 @@ internal fun MainBottomBarLayer(
     }
 
     // 菜单展开时提权至 zIndex = 2f（在底栏与遮罩之上）；正常收回时 zIndex = 0f
-    val menuElevated = isDiscoverActive && (menuExpanded || menuProgress.value > 0.01f)
+    val menuElevated = isCategoryActive && (menuExpanded || menuProgress.value > 0.01f)
 
     Box(
         modifier = modifier
@@ -260,8 +244,8 @@ internal fun MainBottomBarLayer(
             },
         contentAlignment = Alignment.BottomCenter
     ) {
-        if (buttonReveal > 0.01f) {
-            // Layer 1：左侧「热搜 / 热门」切换按钮 —— 图标显示的是「将要切到的模式」
+        if (timelineToggleReveal > 0.01f) {
+            // Layer 1：左侧「动态 / 热门」切换按钮 —— 图标显示的是「将要切到的模式」
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -271,7 +255,7 @@ internal fun MainBottomBarLayer(
                     )
                     .zIndex(if (menuElevated) 2f else 0f)
                     .graphicsLayer {
-                        val p = buttonReveal
+                        val p = timelineToggleReveal
                         alpha = p.coerceIn(0f, 1f)
                         val scale = (0.15f + 0.85f * p).coerceAtLeast(0f)
                         scaleX = scale
@@ -282,24 +266,27 @@ internal fun MainBottomBarLayer(
                     }
             ) {
                 LiquidGlassIconButton(
-                    onClick = onToggleDiscoverMode,
+                    onClick = onToggleTimelineMode,
+                    enabled = isTimelineActive,
                     backdrop = backdrop,
                     size = BAR_BUTTON_SIZE,
                     glassAlpha = 1f,
                     tintAlpha = 1f
                 ) {
                     LiquidGlassIcon(
-                        imageVector = if (isHotMode) {
-                            Icons.Filled.LocalFireDepartment
+                        imageVector = if (showHotFeed) {
+                            Icons.Filled.Home
                         } else {
                             Icons.Outlined.Explore
                         },
-                        contentDescription = if (isHotMode) "切换到微博热搜" else "切换到热门流",
+                        contentDescription = if (showHotFeed) "切换到动态" else "切换到热门",
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
+        }
 
+        if (categoryReveal > 0.01f) {
             // Layer 2：右侧分类按钮 + 菜单（同一块液态玻璃的形变容器）
             Box(
                 modifier = Modifier
@@ -310,10 +297,10 @@ internal fun MainBottomBarLayer(
                         x = -(screenWidthDp / 2 - buttonOffsetX - BAR_BUTTON_SIZE / 2),
                         y = -(navigationBarBottom + BAR_BOTTOM_PADDING + BAR_BUTTON_CENTER_INSET)
                     )
-                    .zIndex(if (menuElevated) 2f else 0f)
+                    .zIndex(if (menuElevated) 2f else if (isCategoryActive) 0.5f else 0f)
                     .graphicsLayer {
                         transformOrigin = menuTransformOrigin
-                        val p = buttonReveal
+                        val p = categoryReveal
                         alpha = p.coerceIn(0f, 1f)
                         // 保留弹性过冲，使弹出与缩放呈现真实饱满的 Q 弹果冻质感
                         val scale = (0.15f + 0.85f * p).coerceAtLeast(0f)
@@ -329,21 +316,21 @@ internal fun MainBottomBarLayer(
                     selectedIndex = selectedCategoryIndex,
                     progress = menuProgress,
                     expanded = menuExpanded,
-                    onToggle = { menuExpanded = !menuExpanded },
+                    onToggle = { if (isCategoryActive) menuExpanded = !menuExpanded },
                     onItemClick = { index ->
                         menuExpanded = false
-                        if (isHotMode) {
+                        if (isHotFeedActive) {
                             hotCategories.getOrNull(index)?.let(onHotCategorySelected)
-                        } else {
+                        } else if (isHotSearchActive) {
                             hotSearchUi.channels.getOrNull(index)?.let(onHotSearchChannelSelected)
                         }
                     },
                     backdrop = backdrop,
-                    emptyLabel = if (isHotMode) "分类加载中…" else "榜单加载中…",
+                    emptyLabel = if (isHotFeedActive) "分类加载中…" else "榜单加载中…",
                     icon = {
                         LiquidGlassIcon(
                             imageVector = Icons.AutoMirrored.Filled.Sort,
-                            contentDescription = if (isHotMode) "切换热门分类" else "切换热搜榜单"
+                            contentDescription = if (isHotFeedActive) "切换热门分类" else "切换热搜榜单"
                         )
                     }
                 )
@@ -360,6 +347,7 @@ internal fun MainBottomBarLayer(
                         x = -(screenWidthDp / 2 - buttonOffsetX - BAR_BUTTON_SIZE / 2),
                         y = -(navigationBarBottom + BAR_BOTTOM_PADDING + BAR_BUTTON_CENTER_INSET)
                     )
+                    .zIndex(if (isComposeActive) 0.5f else 0f)
                     .graphicsLayer {
                         val p = composeReveal
                         alpha = p.coerceIn(0f, 1f)
@@ -373,6 +361,7 @@ internal fun MainBottomBarLayer(
             ) {
                 LiquidGlassIconButton(
                     onClick = onComposeClick,
+                    enabled = isComposeActive,
                     backdrop = backdrop,
                     size = BAR_BUTTON_SIZE,
                     glassAlpha = 1f,
@@ -400,7 +389,7 @@ internal fun MainBottomBarLayer(
             onItemReselected = onReselect,
             backdrop = backdrop,
             badge = { index ->
-                if (index == 0 && unreadCount > 0) {
+                if (index == MainTab.Timeline.ordinal && !showHotFeed && unreadCount > 0) {
                     {
                         Badge {
                             Text(
@@ -420,7 +409,7 @@ internal fun MainBottomBarLayer(
         )
 
         // Layer 4：空白点击收起层（zIndex = 1.5f，在底栏之上、菜单之下）
-        if (isDiscoverActive && (menuExpanded || menuProgress.value > 0.001f)) {
+        if (isCategoryActive && (menuExpanded || menuProgress.value > 0.001f)) {
             Box(
                 modifier = Modifier
                     .matchParentSize()

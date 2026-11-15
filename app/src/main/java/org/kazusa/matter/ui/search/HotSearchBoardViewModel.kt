@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.kazusa.matter.core.network.ApiResult
-import org.kazusa.matter.data.model.DEFAULT_HOT_SEARCH_CONTAINER_ID
 import org.kazusa.matter.data.model.HotSearchBoard
 import org.kazusa.matter.data.model.HotSearchChannel
 import org.kazusa.matter.data.model.REALTIME_HOT_SEARCH_CONTAINER_ID
@@ -38,10 +37,10 @@ data class HotSearchContent(
  */
 data class HotSearchBoardUiState(
     val content: HotSearchContent = HotSearchContent(
-        DEFAULT_HOT_SEARCH_CONTAINER_ID,
+        REALTIME_HOT_SEARCH_CONTAINER_ID,
         HotSearchBoard()
     ),
-    val selectedContainerId: String = DEFAULT_HOT_SEARCH_CONTAINER_ID,
+    val selectedContainerId: String = REALTIME_HOT_SEARCH_CONTAINER_ID,
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
     val hasLoaded: Boolean = false,
@@ -69,7 +68,7 @@ data class HotSearchBoardUiState(
  *   两边通过同一个 ViewModel 读取「当前是哪个榜」；
  * - 榜单列表（我的 / 热搜 / 文娱 / 社会 / 同城…）全部来自服务端下发的
  *   `cardlist_head_cards[].channel_list[]`，客户端只认 containerid，不写死榜名；
- * - 默认「我的」榜为空或请求失败时回退「热搜」榜，这条加载策略也在这里。
+ * - 首屏默认请求「热搜」榜。
  */
 class HotSearchBoardViewModel(
     private val repository: HotSearchRepository
@@ -89,7 +88,7 @@ class HotSearchBoardViewModel(
     /** 首次进入发现页时调用：只加载一次。 */
     fun loadIfNeeded() {
         val current = _uiState.value
-        if (!current.hasLoaded) load(current.selectedContainerId, isRefresh = false, latLon = lastLatLon)
+        if (!current.hasLoaded && loadJob?.isActive != true) load(current.selectedContainerId, isRefresh = false, latLon = lastLatLon)
     }
 
     /** 下拉刷新：重新拉当前榜单。 */
@@ -126,50 +125,28 @@ class HotSearchBoardViewModel(
                 is ApiResult.Success -> {
                     if (token != loadToken) return@launch
                     val data = result.data
-                    val hasLoaded = _uiState.value.hasLoaded
-                    _uiState.update { it.copy(lastLoadedAt = System.currentTimeMillis()) }
-                    if (data.isEmpty && containerId == DEFAULT_HOT_SEARCH_CONTAINER_ID && !hasLoaded) {
-                        // 首屏默认「我的」榜为空（例如未登录访客模式）时兜底「热搜」榜
-                        loadFallback(
-                            token,
-                            containerId = containerId,
-                            latLon = latLon,
-                            preferContent = true,
-                            emptyBoard = data,
-                            markLoadedWhenUnavailable = true
-                        )
+                    // 服务端可能返回同一个热搜榜的不同容器参数，按榜单标识对齐菜单高亮。
+                    val selectedId = if (containerId == REALTIME_HOT_SEARCH_CONTAINER_ID &&
+                        data.channels.none { it.containerid == containerId }
+                    ) {
+                        data.channels.firstOrNull { it.containerid.contains("realtimehot") }
+                            ?.containerid ?: containerId
                     } else {
-                        _uiState.update {
-                            it.copy(content = HotSearchContent(containerId, data), hasLoaded = true)
-                        }
-                        // 当前 selectedContainerId 不在服务端榜单列表里时，对齐到「我的」榜
-                        if (data.channels.isNotEmpty() &&
-                            data.channels.none { it.containerid == _uiState.value.selectedContainerId }
-                        ) {
-                            val matchingMine = data.channels.firstOrNull {
-                                it.name == "我的" || it.containerid.contains("mineband")
-                            }
-                            if (matchingMine != null) {
-                                _uiState.update { it.copy(selectedContainerId = matchingMine.containerid) }
-                            }
-                        }
+                        containerId
+                    }
+                    _uiState.update {
+                        it.copy(
+                            content = HotSearchContent(selectedId, data),
+                            selectedContainerId = selectedId,
+                            hasLoaded = true,
+                            lastLoadedAt = System.currentTimeMillis()
+                        )
                     }
                 }
 
                 is ApiResult.Error -> {
                     if (token != loadToken) return@launch
-                    // 首屏拉取「我的」失败（可能需要登录或网络原因）时兜底「热搜」
-                    if (!_uiState.value.hasLoaded && containerId == DEFAULT_HOT_SEARCH_CONTAINER_ID) {
-                        loadFallback(
-                            token,
-                            containerId = containerId,
-                            latLon = latLon,
-                            preferContent = false,
-                            emptyBoard = HotSearchBoard(),
-                            markLoadedWhenUnavailable = false
-                        )
-                    } else if (!_uiState.value.hasLoaded) {
-                        // 空响应 / 失败不清已选榜单，避免切榜失败变成空白页
+                    if (!_uiState.value.hasLoaded) {
                         _uiState.update { it.copy(content = HotSearchContent(containerId, HotSearchBoard())) }
                     }
                 }
@@ -178,43 +155,6 @@ class HotSearchBoardViewModel(
             }
             if (token == loadToken) {
                 _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
-            }
-        }
-    }
-
-    /**
-     * 兜底拉「热搜」榜。
-     *
-     * @param preferContent 首屏默认榜为空时，只有兜底榜**有内容**才替换；
-     *   默认榜请求失败时只要兜底成功就采纳（可能是空榜，但至少布局正常）。
-     * @param emptyBoard 兜底也失败时的落点（首屏保留原始空榜 / 失败时用空榜单）。
-     * @param markLoadedWhenUnavailable 兜底同样不可用时是否算「已加载」。默认榜请求失败时不算，
-     *   这样下次进入页面（`loadIfNeeded`）仍会重试。
-     */
-    private suspend fun loadFallback(
-        token: Int,
-        containerId: String,
-        latLon: Pair<Double, Double>?,
-        preferContent: Boolean,
-        emptyBoard: HotSearchBoard,
-        markLoadedWhenUnavailable: Boolean
-    ) {
-        val fallback = repository.board(REALTIME_HOT_SEARCH_CONTAINER_ID, latLon)
-        if (token != loadToken) return
-        if (fallback is ApiResult.Success && (!preferContent || !fallback.data.isEmpty)) {
-            _uiState.update {
-                it.copy(
-                    content = HotSearchContent(REALTIME_HOT_SEARCH_CONTAINER_ID, fallback.data),
-                    selectedContainerId = REALTIME_HOT_SEARCH_CONTAINER_ID,
-                    hasLoaded = true
-                )
-            }
-        } else {
-            _uiState.update {
-                it.copy(
-                    content = HotSearchContent(containerId, emptyBoard),
-                    hasLoaded = it.hasLoaded || markLoadedWhenUnavailable
-                )
             }
         }
     }
