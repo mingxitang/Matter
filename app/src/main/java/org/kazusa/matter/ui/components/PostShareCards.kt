@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,15 @@ fun PostShareCards(cards: List<PostShareCard>) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         cards.forEach { card ->
+            if (card.coverOnly && card.coverUrl != null) {
+                AsyncImage(
+                    model = card.coverUrl,
+                    contentDescription = "分享封面",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp).clip(RoundedCornerShape(8.dp))
+                )
+                return@forEach
+            }
             OutlinedCard(
                 onClick = { uriHandler.openUri(card.url) },
                 modifier = Modifier.fillMaxWidth()

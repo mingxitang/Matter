@@ -2,6 +2,7 @@ package org.kazusa.matter.core.util
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.LinkAnnotation
+import kotlinx.serialization.json.Json
 import org.junit.Assert.*
 import org.junit.Test
 import org.kazusa.matter.data.model.WeiboMediaInfoDto
@@ -131,6 +132,7 @@ class WeiboTextFormatterTest {
         assertEquals("推荐阅读", formatted.annotatedString.text)
         val card = formatted.shareCards.single()
         assertFalse(card.isVote)
+        assertFalse(card.coverOnly)
         assertEquals("文章标题", card.title)
         assertEquals("example.com", card.host)
         assertEquals("https://example.com/cover.jpg", card.coverUrl)
@@ -172,6 +174,44 @@ class WeiboTextFormatterTest {
         assertEquals("BLG夺冠，你心目中谁的功劳最大？", formatted.annotatedString.text)
         assertTrue(formatted.shareCards.single().isVote)
         assertEquals(url, formatted.shareCards.single().url)
+    }
+
+    @Test
+    fun weiboProfileFallbackWithAnImageCoverOnlyShowsThePicture() {
+        val post = Json.decodeFromString<WeiboStatusDto>(
+            """
+            {
+              "text_raw": "http://t.cn/AXl9uPYi ​",
+              "url_struct": [{
+                "short_url": "https://t.cn/AXl9uPYi",
+                "long_url": "https://weibo.com/5966770936?ct=1791975608438",
+                "url_pic": {"url": "https://wx1.sinaimg.cn/large/example.jpg"}
+              }]
+            }
+            """.trimIndent()
+        )
+
+        val formatted = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post)
+
+        assertTrue(formatted.annotatedString.text.isEmpty())
+        assertTrue(formatted.shareCards.single().coverOnly)
+        assertEquals("https://wx1.sinaimg.cn/large/example.jpg", formatted.shareCards.single().coverUrl)
+    }
+
+    @Test
+    fun linkOnlyPostReusesTheCoverFromTheMatchingWeiboPageWithoutADuplicateCard() {
+        val post = WeiboStatusDto(
+            textRaw = "http://t.cn/AXl9uPYi",
+            pageInfo = WeiboPageInfoDto(
+                pageUrl = "https://weibo.com/5966770936?ct=1791975608438",
+                pagePic = "//wx1.sinaimg.cn/large/example.jpg"
+            )
+        )
+
+        val card = WeiboTextFormatter.formatWeiboContent(primaryColor = Color.Blue, post = post).shareCards.single()
+
+        assertTrue(card.coverOnly)
+        assertEquals("https://wx1.sinaimg.cn/large/example.jpg", card.coverUrl)
     }
 
     @Test

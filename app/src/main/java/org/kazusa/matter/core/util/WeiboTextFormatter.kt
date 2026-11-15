@@ -34,7 +34,8 @@ data class PostShareCard(
     val title: String,
     val host: String,
     val coverUrl: String?,
-    val isVote: Boolean
+    val isVote: Boolean,
+    val coverOnly: Boolean = false
 )
 
 object WeiboTextFormatter {
@@ -156,11 +157,27 @@ object WeiboTextFormatter {
 
         val inlineContentMap = mutableMapOf<String, InlineTextContent>()
         var inlineIdCounter = 0
+        val linkOnlyPost = post != null && preprocessed
+            .trim { it.isWhitespace() || it == '\u200B' }
+            .let { (it.startsWith("http") || it.startsWith("\uFFF9LINK|")) && tokenRegex.matches(it) }
 
         fun AnnotatedString.Builder.appendWebLink(href: String, label: String? = null, fromText: Boolean = true) {
-            val link = post?.urlStruct?.firstOrNull { it.shortUrl == href || it.longUrl == href }
-            val target = link?.longUrl?.takeIf { it.isNotBlank() } ?: href
-            val page = post?.pageInfo?.takeIf { it.pageUrl == target || it.pageUrl == href }
+            val shortLink = weiboShortLink.containsMatchIn(href)
+            val link = post?.urlStruct?.firstOrNull {
+                it.shortUrl == href || it.longUrl == href ||
+                    (shortLink && it.shortUrl?.substringAfter("://") == href.substringAfter("://"))
+            }
+            val target = link?.longUrl?.takeIf { it.isNotBlank() } ?: link?.shortUrl ?: href
+            val sharePage = post?.pageInfo
+            val targetUri = parseWebUri(target)
+            val profileShare = isWeiboProfileShare(targetUri)
+            val useUnlinkedPage = linkOnlyPost && videos.isEmpty() && fromText && shortLink &&
+                sharePage != null && (
+                    isMiniProgram(sharePage.type) || isWeiboProfileShare(parseWebUri(sharePage.pageUrl)) ||
+                        (sharePage.pageUrl.isNullOrBlank() &&
+                            (weiboShortLink.containsMatchIn(target) || profileShare))
+                    )
+            val page = sharePage?.takeIf { it.pageUrl == target || it.pageUrl == href || useUnlinkedPage }
             val title = sequenceOf(link?.title, page?.pageTitle, label, originalLinkTitles[href])
                 .filterNotNull()
                 .map(String::trim)
@@ -169,8 +186,7 @@ object WeiboTextFormatter {
                 val isVideoLink = link?.objectType.equals("video", ignoreCase = true) ||
                     weiboVideoPage.containsMatchIn(target) ||
                     videos.any { it.videoUrl == target || it.streams.any { stream -> stream.url == target } } ||
-                    (weiboShortLink.containsMatchIn(href) &&
-                        (title == "微博视频" || title?.endsWith("的微博视频") == true))
+                    (shortLink && (title == "微博视频" || title?.endsWith("的微博视频") == true))
                 if (isVideoLink) {
                     if (fromText) removedInlineLink = true
                     return
@@ -179,22 +195,30 @@ object WeiboTextFormatter {
 
             val isVote = link?.objectType.equals("vote", ignoreCase = true) ||
                 page?.type.equals("vote", ignoreCase = true) || weiboVotePage.containsMatchIn(target) ||
-                (weiboShortLink.containsMatchIn(href) && (
+                (shortLink && (
                     title == "微博投票" || title == "参与投票" || title?.endsWith("的微博投票") == true
                 ))
             if (post != null) {
-                val linkUri = parseWebUri(target) ?: parseWebUri(href)
+                val linkUri = targetUri ?: parseWebUri(href)
                 if (linkUri != null) {
+                    val coverUrl = sequenceOf(link?.coverUrl, page?.pagePic)
+                        .filterNotNull()
+                        .map { if (it.startsWith("//")) "https:$it" else it }
+                        .firstOrNull { parseWebUri(it) != null }
+                    val coverOnly = !isVote && coverUrl != null && (
+                        isMiniProgram(link?.objectType) || isMiniProgram(page?.type) ||
+                            (shortLink && profileShare) || (useUnlinkedPage && page?.pagePic != null)
+                        )
+                    val cardKey = if (coverOnly) parseWebUri(page?.pageUrl) ?: linkUri else linkUri
                     shareCards.putIfAbsent(
-                        linkUri.toString(),
+                        cardKey.toString(),
                         PostShareCard(
                             url = linkUri.toString(),
                             title = title ?: if (isVote) "微博投票" else "网页链接",
                             host = linkUri.host.orEmpty(),
-                            coverUrl = (link?.coverUrl ?: page?.pagePic)
-                                ?.let { if (it.startsWith("//")) "https:$it" else it }
-                                ?.takeIf { parseWebUri(it) != null },
-                            isVote = isVote
+                            coverUrl = coverUrl,
+                            isVote = isVote,
+                            coverOnly = coverOnly
                         )
                     )
                     if (fromText) removedInlineLink = true
@@ -322,7 +346,7 @@ object WeiboTextFormatter {
         }
 
         val visibleText = if (removedInlineLink) {
-            val trimmed = annotated.text.trim()
+            val trimmed = annotated.text.trim { it.isWhitespace() || it == '\u200B' }
             val start = if (trimmed.isEmpty()) 0 else annotated.text.indexOf(trimmed)
             annotated.subSequence(start, start + trimmed.length)
         } else {
@@ -335,8 +359,18 @@ object WeiboTextFormatter {
         )
     }
 
-    private fun parseWebUri(url: String): URI? = runCatching { URI(url) }.getOrNull()
+    private fun parseWebUri(url: String?): URI? = url?.let { runCatching { URI(it) }.getOrNull() }
         ?.takeIf { (it.scheme == "http" || it.scheme == "https") && it.host != null && it.userInfo == null }
+
+    private fun isMiniProgram(type: String?): Boolean =
+        type.equals("mini_program", ignoreCase = true) || type.equals("miniprogram", ignoreCase = true)
+
+    private fun isWeiboProfileShare(uri: URI?): Boolean {
+        val host = uri?.host ?: return false
+        if (host != "weibo.com" && host != "www.weibo.com" && host != "m.weibo.cn") return false
+        return uri.path?.removePrefix("/")?.let { it.isNotEmpty() && it.all(Char::isDigit) } == true &&
+            uri.query?.split('&')?.any { it.startsWith("ct=") } == true
+    }
 
     private fun readAnchor(match: MatchResult): Pair<String, String> {
         val hrefMatch = hrefAttrRegex.find(match.groupValues[1])
